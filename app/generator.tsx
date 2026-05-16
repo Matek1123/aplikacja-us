@@ -13,13 +13,14 @@ import {
 } from "react-native";
 
 import { institutions } from "../data/institutions";
-import { openai } from "../lib/openai";
+import { generateWithAI } from "../lib/openai";
 
 export default function GeneratorScreen() {
   const [phrase, setPhrase] = useState("");
   const [aiQuestions, setAiQuestions] = useState("");
   const [userClarification, setUserClarification] = useState("");
   const [generatedMail, setGeneratedMail] = useState("");
+  const [customEmail, setCustomEmail] = useState("");
   const [loadingQuestions, setLoadingQuestions] = useState(false);
   const [loadingMail, setLoadingMail] = useState(false);
 
@@ -31,49 +32,21 @@ export default function GeneratorScreen() {
     (item) => item.id === selectedInstitutionId
   );
 
+  const targetEmail = customEmail.trim() || selectedInstitution?.email || "";
+
   const generateQuestions = async () => {
     if (!phrase.trim()) {
-      Alert.alert("Brak frazy", "Wpisz np. „Bitcoin podatki”.");
+      Alert.alert("Brak frazy", "Wpisz np. Bitcoin podatki.");
       return;
     }
 
     try {
       setLoadingQuestions(true);
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: [
-          {
-            role: "system",
-            content: `
+      const prompt = `
 Jesteś asystentem, który pomaga użytkownikowi doprecyzować sprawę przed napisaniem maila do polskiego urzędu.
 
-Użytkownik wpisuje krótką frazę, np. "Bitcoin podatki", "budowa garażu", "zameldowanie", "spadek po ojcu".
-Twoim zadaniem NIE jest jeszcze pisać maila.
-
-Masz:
-1. zgadnąć, o co użytkownikowi może chodzić,
-2. wypisać konkretne możliwe wątki,
-3. stworzyć listę pytań doprecyzowujących,
-4. napisać to tak, żeby użytkownik mógł łatwo edytować tekst.
-
-Format odpowiedzi:
-"Możliwe intencje:"
-- ...
-
-"Pytania doprecyzowujące:"
-1. ...
-2. ...
-3. ...
-
-"Proponowany zakres zapytania do urzędu:"
-...
-`,
-          },
-          {
-            role: "user",
-            content: `
-Fraza użytkownika:
+Użytkownik wpisał krótką frazę:
 ${phrase}
 
 Wybrany urząd:
@@ -81,15 +54,29 @@ ${selectedInstitution?.name}
 
 Kategoria:
 ${selectedInstitution?.category}
-`,
-          },
-        ],
-      });
 
-      setAiQuestions(
-        completion.choices[0]?.message?.content ||
-          "Nie udało się wygenerować pytań."
-      );
+Twoje zadanie:
+1. Zgadnij, o co użytkownikowi może chodzić.
+2. Wypisz możliwe intencje.
+3. Zadaj pytania doprecyzowujące.
+4. Zaproponuj zakres zapytania do urzędu.
+5. Nie pisz jeszcze gotowego maila.
+
+Format:
+Możliwe intencje:
+- ...
+
+Pytania doprecyzowujące:
+1. ...
+2. ...
+3. ...
+
+Proponowany zakres zapytania do urzędu:
+...
+`;
+
+      const text = await generateWithAI(prompt);
+      setAiQuestions(text);
     } catch (error) {
       console.log(error);
       Alert.alert("Błąd", "Nie udało się wygenerować pytań AI.");
@@ -107,54 +94,33 @@ ${selectedInstitution?.category}
     try {
       setLoadingMail(true);
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: [
-          {
-            role: "system",
-            content: `
-Jesteś asystentem piszącym formalne maile do polskich urzędów.
+      const prompt = `
+Napisz formalny mail do polskiego urzędu.
 
-Na podstawie:
-- krótkiej frazy użytkownika,
-- pytań doprecyzowujących AI,
-- doprecyzowania użytkownika,
-napisz gotowy mail do urzędu.
-
-Zasady:
-- pisz formalnie po polsku,
-- nie dawaj porady prawnej ani podatkowej,
-- poproś urząd o stanowisko,
-- poproś o podstawę prawną,
-- użyj konkretnych pytań,
-- nie dodawaj komentarzy poza treścią maila.
-`,
-          },
-          {
-            role: "user",
-            content: `
 Wybrany urząd:
 ${selectedInstitution?.name}
 
-Fraza początkowa:
+Fraza początkowa użytkownika:
 ${phrase}
 
-Robocze pytania/intencje:
+Robocze pytania i intencje:
 ${aiQuestions}
 
 Doprecyzowanie użytkownika:
 ${userClarification || "Brak dodatkowego doprecyzowania."}
 
-Napisz gotowy mail.
-`,
-          },
-        ],
-      });
+Wymagania:
+- pisz formalnie po polsku,
+- nie udzielaj porady prawnej ani podatkowej,
+- poproś urząd o stanowisko,
+- poproś o wskazanie podstawy prawnej,
+- użyj konkretnych pytań,
+- mail ma być gotowy do wysłania,
+- nie dodawaj komentarzy poza treścią maila.
+`;
 
-      setGeneratedMail(
-        completion.choices[0]?.message?.content ||
-          "Nie udało się wygenerować maila."
-      );
+      const text = await generateWithAI(prompt);
+      setGeneratedMail(text);
     } catch (error) {
       console.log(error);
       Alert.alert("Błąd", "Nie udało się wygenerować maila.");
@@ -174,9 +140,11 @@ Napisz gotowy mail.
     const newItem = {
       id: Date.now().toString(),
       institutionName: selectedInstitution?.name || "",
-      institutionEmail: selectedInstitution?.email || "",
+      institutionEmail: targetEmail,
       institutionCategory: selectedInstitution?.category || "",
       keywords: phrase,
+      aiQuestions,
+      userClarification,
       content: generatedMail,
       subject,
       createdAt: new Date().toISOString(),
@@ -200,17 +168,39 @@ Napisz gotowy mail.
       return;
     }
 
-    if (!selectedInstitution?.email) {
+    if (!targetEmail) {
       Alert.alert(
         "Brak adresu",
-        "Ten urząd wymaga ręcznego wpisania adresu e-mail. Dodamy to w kolejnym kroku."
+        "Wpisz adres e-mail urzędu albo wybierz urząd z gotowym adresem."
       );
       return;
     }
 
     const subject = `Zapytanie do urzędu: ${phrase}`;
 
-    const url = `mailto:${selectedInstitution.email}?subject=${encodeURIComponent(
+    const newItem = {
+      id: Date.now().toString(),
+      institutionName: selectedInstitution?.name || "",
+      institutionEmail: targetEmail,
+      institutionCategory: selectedInstitution?.category || "",
+      keywords: phrase,
+      aiQuestions,
+      userClarification,
+      content: generatedMail,
+      subject,
+      createdAt: new Date().toISOString(),
+      status: "ready_to_send",
+    };
+
+    const existing = await AsyncStorage.getItem("mail_history");
+    const history = existing ? JSON.parse(existing) : [];
+
+    await AsyncStorage.setItem(
+      "mail_history",
+      JSON.stringify([newItem, ...history])
+    );
+
+    const url = `mailto:${targetEmail}?subject=${encodeURIComponent(
       subject
     )}&body=${encodeURIComponent(generatedMail)}`;
 
@@ -239,7 +229,10 @@ Napisz gotowy mail.
                 styles.institutionButton,
                 selected && styles.institutionButtonActive,
               ]}
-              onPress={() => setSelectedInstitutionId(item.id)}
+              onPress={() => {
+                setSelectedInstitutionId(item.id);
+                setCustomEmail("");
+              }}
             >
               <Text
                 style={[
@@ -271,6 +264,17 @@ Napisz gotowy mail.
           );
         })}
       </View>
+
+      <Text style={styles.label}>Adres e-mail urzędu</Text>
+
+      <TextInput
+        style={styles.inputSmall}
+        placeholder="np. sekretariat@urzad.pl"
+        value={targetEmail}
+        onChangeText={setCustomEmail}
+        keyboardType="email-address"
+        autoCapitalize="none"
+      />
 
       <Text style={styles.step}>Krok 1</Text>
       <Text style={styles.label}>Krótka fraza</Text>
@@ -374,6 +378,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 16,
     marginBottom: 16,
+    backgroundColor: "#fff",
   },
   input: {
     borderWidth: 1,
@@ -383,6 +388,7 @@ const styles = StyleSheet.create({
     minHeight: 110,
     marginBottom: 16,
     textAlignVertical: "top",
+    backgroundColor: "#fff",
   },
   aiBox: {
     borderWidth: 1,
@@ -402,6 +408,7 @@ const styles = StyleSheet.create({
     minHeight: 360,
     marginBottom: 16,
     textAlignVertical: "top",
+    backgroundColor: "#fff",
   },
   generateButton: {
     backgroundColor: "#111",
