@@ -1,5 +1,8 @@
+cd ~/aplikacja-us 2>/dev/null || cd ~/urzad-ai-mailer
+
+cat > app/generator.tsx <<'EOF'
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Linking from "expo-linking";
+import * as Clipboard from "expo-clipboard";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -12,141 +15,123 @@ import {
   View,
 } from "react-native";
 
-import { institutions } from "../data/institutions";
 import { generateWithAI } from "../lib/openai";
 
+type Message = {
+  role: "user" | "ai";
+  content: string;
+};
+
 export default function GeneratorScreen() {
-  const [phrase, setPhrase] = useState("");
-  const [aiQuestions, setAiQuestions] = useState("");
-  const [userClarification, setUserClarification] = useState("");
-  const [generatedMail, setGeneratedMail] = useState("");
-  const [customEmail, setCustomEmail] = useState("");
-  const [loadingQuestions, setLoadingQuestions] = useState(false);
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [finalMail, setFinalMail] = useState("");
+  const [loading, setLoading] = useState(false);
   const [loadingMail, setLoadingMail] = useState(false);
 
-  const [selectedInstitutionId, setSelectedInstitutionId] = useState(
-    institutions[0].id
-  );
+  const sendMessage = async () => {
+    if (!input.trim()) return;
 
-  const selectedInstitution = institutions.find(
-    (item) => item.id === selectedInstitutionId
-  );
+    const nextMessages: Message[] = [...messages, { role: "user", content: input }];
+    setMessages(nextMessages);
 
-  const targetEmail = customEmail.trim() || selectedInstitution?.email || "";
-
-  const generateQuestions = async () => {
-    if (!phrase.trim()) {
-      Alert.alert("Brak frazy", "Wpisz np. Bitcoin podatki.");
-      return;
-    }
+    const currentInput = input;
+    setInput("");
 
     try {
-      setLoadingQuestions(true);
+      setLoading(true);
+
+      const conversation = nextMessages
+        .map((m) => `${m.role === "user" ? "Użytkownik" : "AI"}: ${m.content}`)
+        .join("\n\n");
 
       const prompt = `
-Jesteś asystentem, który pomaga użytkownikowi doprecyzować sprawę przed napisaniem maila do polskiego urzędu.
+Jesteś polskim asystentem pomagającym przygotować zapytanie do urzędu.
 
-Użytkownik wpisał krótką frazę:
-${phrase}
+Prowadź rozmowę naturalnie.
+Na podstawie wiadomości użytkownika:
+- domyśl się możliwej intencji,
+- zadaj 1-3 krótkie pytania doprecyzowujące,
+- nie pisz jeszcze finalnego maila,
+- nie używaj sztywnego szablonu,
+- mów po polsku.
 
-Wybrany urząd:
-${selectedInstitution?.name}
+Historia rozmowy:
+${conversation}
 
-Kategoria:
-${selectedInstitution?.category}
-
-Twoje zadanie:
-1. Zgadnij, o co użytkownikowi może chodzić.
-2. Wypisz możliwe intencje.
-3. Zadaj pytania doprecyzowujące.
-4. Zaproponuj zakres zapytania do urzędu.
-5. Nie pisz jeszcze gotowego maila.
-
-Format:
-Możliwe intencje:
-- ...
-
-Pytania doprecyzowujące:
-1. ...
-2. ...
-3. ...
-
-Proponowany zakres zapytania do urzędu:
-...
+Ostatnia wiadomość użytkownika:
+${currentInput}
 `;
 
-      const text = await generateWithAI(prompt);
-      setAiQuestions(text);
+      const response = await generateWithAI(prompt);
+      setMessages((prev) => [...prev, { role: "ai", content: response }]);
     } catch (error) {
-      console.log(error);
-      Alert.alert("Błąd", "Nie udało się wygenerować pytań AI.");
+      setMessages((prev) => [
+        ...prev,
+        { role: "ai", content: "Nie udało się wygenerować odpowiedzi lokalnego AI." },
+      ]);
     } finally {
-      setLoadingQuestions(false);
+      setLoading(false);
     }
   };
 
   const generateFinalMail = async () => {
-    if (!aiQuestions.trim()) {
-      Alert.alert("Brak pytań", "Najpierw wygeneruj pytania doprecyzowujące.");
+    if (messages.length === 0) {
+      Alert.alert("Brak rozmowy", "Najpierw opisz sprawę.");
       return;
     }
 
     try {
       setLoadingMail(true);
 
+      const conversation = messages
+        .map((m) => `${m.role === "user" ? "Użytkownik" : "AI"}: ${m.content}`)
+        .join("\n\n");
+
       const prompt = `
-Napisz formalny mail do polskiego urzędu.
+Na podstawie poniższej rozmowy napisz gotowy formalny mail do polskiego urzędu.
 
-Wybrany urząd:
-${selectedInstitution?.name}
-
-Fraza początkowa użytkownika:
-${phrase}
-
-Robocze pytania i intencje:
-${aiQuestions}
-
-Doprecyzowanie użytkownika:
-${userClarification || "Brak dodatkowego doprecyzowania."}
-
-Wymagania:
-- pisz formalnie po polsku,
-- nie udzielaj porady prawnej ani podatkowej,
-- poproś urząd o stanowisko,
-- poproś o wskazanie podstawy prawnej,
-- użyj konkretnych pytań,
+Zasady:
 - mail ma być gotowy do wysłania,
+- użyj formalnego języka,
+- zawrzyj konkretne pytania,
+- poproś o wskazanie podstawy prawnej,
+- nie twórz porady prawnej ani podatkowej,
 - nie dodawaj komentarzy poza treścią maila.
+
+Rozmowa:
+${conversation}
 `;
 
-      const text = await generateWithAI(prompt);
-      setGeneratedMail(text);
+      const mail = await generateWithAI(prompt);
+      setFinalMail(mail);
     } catch (error) {
-      console.log(error);
-      Alert.alert("Błąd", "Nie udało się wygenerować maila.");
+      Alert.alert("Błąd", "Nie udało się wygenerować finalnego maila.");
     } finally {
       setLoadingMail(false);
     }
   };
 
+  const copyMail = async () => {
+    if (!finalMail.trim()) return;
+    await Clipboard.setStringAsync(finalMail);
+    Alert.alert("Skopiowano", "Mail został skopiowany.");
+  };
+
   const saveMail = async () => {
-    if (!generatedMail.trim()) {
-      Alert.alert("Brak treści", "Najpierw wygeneruj mail.");
+    if (!finalMail.trim()) {
+      Alert.alert("Brak maila", "Najpierw wygeneruj finalny mail.");
       return;
     }
 
-    const subject = `Zapytanie do urzędu: ${phrase}`;
-
-    const newItem = {
+    const item = {
       id: Date.now().toString(),
-      institutionName: selectedInstitution?.name || "",
-      institutionEmail: targetEmail,
-      institutionCategory: selectedInstitution?.category || "",
-      keywords: phrase,
-      aiQuestions,
-      userClarification,
-      content: generatedMail,
-      subject,
+      institutionName: "Do uzupełnienia",
+      institutionEmail: "",
+      institutionCategory: "",
+      keywords: messages[0]?.content || "",
+      content: finalMail,
+      subject: "Zapytanie do urzędu",
       createdAt: new Date().toISOString(),
       status: "draft",
     };
@@ -154,285 +139,96 @@ Wymagania:
     const existing = await AsyncStorage.getItem("mail_history");
     const history = existing ? JSON.parse(existing) : [];
 
-    await AsyncStorage.setItem(
-      "mail_history",
-      JSON.stringify([newItem, ...history])
-    );
-
-    Alert.alert("Zapisano", "Mail zapisano jako szkic.");
-  };
-
-  const openMailApp = async () => {
-    if (!generatedMail.trim()) {
-      Alert.alert("Brak treści", "Najpierw wygeneruj mail.");
-      return;
-    }
-
-    if (!targetEmail) {
-      Alert.alert(
-        "Brak adresu",
-        "Wpisz adres e-mail urzędu albo wybierz urząd z gotowym adresem."
-      );
-      return;
-    }
-
-    const subject = `Zapytanie do urzędu: ${phrase}`;
-
-    const newItem = {
-      id: Date.now().toString(),
-      institutionName: selectedInstitution?.name || "",
-      institutionEmail: targetEmail,
-      institutionCategory: selectedInstitution?.category || "",
-      keywords: phrase,
-      aiQuestions,
-      userClarification,
-      content: generatedMail,
-      subject,
-      createdAt: new Date().toISOString(),
-      status: "ready_to_send",
-    };
-
-    const existing = await AsyncStorage.getItem("mail_history");
-    const history = existing ? JSON.parse(existing) : [];
-
-    await AsyncStorage.setItem(
-      "mail_history",
-      JSON.stringify([newItem, ...history])
-    );
-
-    const url = `mailto:${targetEmail}?subject=${encodeURIComponent(
-      subject
-    )}&body=${encodeURIComponent(generatedMail)}`;
-
-    await Linking.openURL(url);
+    await AsyncStorage.setItem("mail_history", JSON.stringify([item, ...history]));
+    Alert.alert("Zapisano", "Mail zapisano w historii jako szkic.");
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Generator zapytań AI</Text>
+    <View style={styles.container}>
+      <Text style={styles.title}>US AI</Text>
+      <Text style={styles.subtitle}>Opisz sprawę, doprecyzuj ją w rozmowie, a potem wygeneruj mail do urzędu.</Text>
 
-      <Text style={styles.description}>
-        Wpisz krótką frazę. AI najpierw zgadnie, o co może Ci chodzić i zada
-        pytania doprecyzowujące. Potem z tego wygenerujesz maila.
-      </Text>
+      <ScrollView style={styles.chat}>
+        {messages.map((message, index) => (
+          <View
+            key={index}
+            style={[
+              styles.message,
+              message.role === "user" ? styles.userMessage : styles.aiMessage,
+            ]}
+          >
+            <Text style={message.role === "user" ? styles.userText : styles.aiText}>
+              {message.content}
+            </Text>
+          </View>
+        ))}
 
-      <Text style={styles.label}>Wybierz typ urzędu</Text>
+        {loading ? <ActivityIndicator size="large" style={styles.loader} /> : null}
 
-      <View style={styles.institutionList}>
-        {institutions.map((item) => {
-          const selected = item.id === selectedInstitutionId;
+        {finalMail ? (
+          <View style={styles.finalBox}>
+            <Text style={styles.finalTitle}>Finalny mail</Text>
+            <TextInput
+              style={styles.finalInput}
+              multiline
+              value={finalMail}
+              onChangeText={setFinalMail}
+            />
 
-          return (
-            <Pressable
-              key={item.id}
-              style={[
-                styles.institutionButton,
-                selected && styles.institutionButtonActive,
-              ]}
-              onPress={() => {
-                setSelectedInstitutionId(item.id);
-                setCustomEmail("");
-              }}
-            >
-              <Text
-                style={[
-                  styles.institutionName,
-                  selected && styles.institutionTextActive,
-                ]}
-              >
-                {item.name}
-              </Text>
-
-              <Text
-                style={[
-                  styles.institutionCategory,
-                  selected && styles.institutionTextActive,
-                ]}
-              >
-                {item.category}
-              </Text>
-
-              <Text
-                style={[
-                  styles.institutionEmail,
-                  selected && styles.institutionTextActive,
-                ]}
-              >
-                {item.email || "adres e-mail do uzupełnienia"}
-              </Text>
+            <Pressable style={styles.copyButton} onPress={copyMail}>
+              <Text style={styles.buttonText}>Kopiuj mail</Text>
             </Pressable>
-          );
-        })}
+
+            <Pressable style={styles.saveButton} onPress={saveMail}>
+              <Text style={styles.buttonText}>Zapisz do historii</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </ScrollView>
+
+      <View style={styles.bottom}>
+        <TextInput
+          style={styles.input}
+          placeholder="np. bitcoin podatki, sprzedaż BTC w 2024..."
+          value={input}
+          onChangeText={setInput}
+          multiline
+        />
+
+        <Pressable style={styles.button} onPress={sendMessage}>
+          <Text style={styles.buttonText}>Wyślij</Text>
+        </Pressable>
+
+        <Pressable style={styles.mailButton} onPress={generateFinalMail}>
+          <Text style={styles.buttonText}>
+            {loadingMail ? "Generuję..." : "Generuj finalny mail"}
+          </Text>
+        </Pressable>
       </View>
-
-      <Text style={styles.label}>Adres e-mail urzędu</Text>
-
-      <TextInput
-        style={styles.inputSmall}
-        placeholder="np. sekretariat@urzad.pl"
-        value={targetEmail}
-        onChangeText={setCustomEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-
-      <Text style={styles.step}>Krok 1</Text>
-      <Text style={styles.label}>Krótka fraza</Text>
-
-      <TextInput
-        style={styles.inputSmall}
-        placeholder="np. Bitcoin podatki"
-        value={phrase}
-        onChangeText={setPhrase}
-      />
-
-      <Pressable style={styles.generateButton} onPress={generateQuestions}>
-        <Text style={styles.buttonText}>AI: wymyśl możliwe pytania</Text>
-      </Pressable>
-
-      {loadingQuestions ? (
-        <ActivityIndicator size="large" style={styles.loader} />
-      ) : null}
-
-      <Text style={styles.step}>Krok 2</Text>
-      <Text style={styles.label}>Robocze pytania od AI</Text>
-
-      <TextInput
-        style={styles.aiBox}
-        multiline
-        placeholder="Tutaj AI wypisze możliwe intencje i pytania. Możesz je edytować."
-        value={aiQuestions}
-        onChangeText={setAiQuestions}
-      />
-
-      <Text style={styles.label}>Twoje doprecyzowanie</Text>
-
-      <TextInput
-        style={styles.input}
-        multiline
-        placeholder="np. Chodzi mi tylko o sprzedaż BTC za PLN w 2024 roku, kupione w 2021."
-        value={userClarification}
-        onChangeText={setUserClarification}
-      />
-
-      <Pressable style={styles.mailGenerateButton} onPress={generateFinalMail}>
-        <Text style={styles.buttonText}>AI: napisz gotowy mail</Text>
-      </Pressable>
-
-      {loadingMail ? (
-        <ActivityIndicator size="large" style={styles.loader} />
-      ) : null}
-
-      <Text style={styles.step}>Krok 3</Text>
-      <Text style={styles.label}>Gotowy mail do edycji</Text>
-
-      <TextInput
-        style={styles.output}
-        multiline
-        placeholder="Tutaj pojawi się finalny mail."
-        value={generatedMail}
-        onChangeText={setGeneratedMail}
-      />
-
-      <Pressable style={styles.saveButton} onPress={saveMail}>
-        <Text style={styles.buttonText}>Zapisz jako szkic</Text>
-      </Pressable>
-
-      <Pressable style={styles.mailButton} onPress={openMailApp}>
-        <Text style={styles.buttonText}>Otwórz w aplikacji mailowej</Text>
-      </Pressable>
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 24, backgroundColor: "#fff", flexGrow: 1 },
-  title: { fontSize: 30, fontWeight: "700", marginBottom: 8 },
-  description: { color: "#555", fontSize: 15, lineHeight: 22, marginBottom: 24 },
-  step: {
-    color: "#2563eb",
-    fontWeight: "800",
-    fontSize: 13,
-    marginTop: 8,
-    marginBottom: 6,
-    textTransform: "uppercase",
-  },
-  label: { fontSize: 16, fontWeight: "700", marginBottom: 8 },
-  institutionList: { marginBottom: 20 },
-  institutionButton: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    backgroundColor: "#fff",
-  },
-  institutionButtonActive: { backgroundColor: "#111", borderColor: "#111" },
-  institutionName: { fontWeight: "700", fontSize: 16, marginBottom: 4 },
-  institutionCategory: { color: "#666", marginBottom: 4 },
-  institutionEmail: { color: "#666", fontSize: 12 },
-  institutionTextActive: { color: "#fff" },
-  inputSmall: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 16,
-    backgroundColor: "#fff",
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 14,
-    padding: 16,
-    minHeight: 110,
-    marginBottom: 16,
-    textAlignVertical: "top",
-    backgroundColor: "#fff",
-  },
-  aiBox: {
-    borderWidth: 1,
-    borderColor: "#93c5fd",
-    borderRadius: 14,
-    padding: 16,
-    minHeight: 260,
-    marginBottom: 16,
-    textAlignVertical: "top",
-    backgroundColor: "#eff6ff",
-  },
-  output: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 14,
-    padding: 16,
-    minHeight: 360,
-    marginBottom: 16,
-    textAlignVertical: "top",
-    backgroundColor: "#fff",
-  },
-  generateButton: {
-    backgroundColor: "#111",
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 16,
-  },
-  mailGenerateButton: {
-    backgroundColor: "#7c3aed",
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 16,
-  },
-  saveButton: {
-    backgroundColor: "#2563eb",
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 12,
-  },
-  mailButton: {
-    backgroundColor: "#16a34a",
-    padding: 16,
-    borderRadius: 14,
-  },
-  buttonText: { color: "#fff", textAlign: "center", fontWeight: "700" },
-  loader: { marginVertical: 20 },
+  container: { flex: 1, backgroundColor: "#fff", paddingTop: 60 },
+  title: { fontSize: 34, fontWeight: "800", paddingHorizontal: 20 },
+  subtitle: { color: "#666", paddingHorizontal: 20, marginTop: 6, marginBottom: 20, lineHeight: 21 },
+  chat: { flex: 1, paddingHorizontal: 16 },
+  message: { padding: 16, borderRadius: 18, marginBottom: 12, maxWidth: "90%" },
+  userMessage: { backgroundColor: "#111", alignSelf: "flex-end" },
+  aiMessage: { backgroundColor: "#f1f5f9", alignSelf: "flex-start" },
+  userText: { color: "#fff", fontSize: 16, lineHeight: 24 },
+  aiText: { color: "#111", fontSize: 16, lineHeight: 24 },
+  loader: { marginTop: 20 },
+  bottom: { borderTopWidth: 1, borderColor: "#eee", padding: 16, backgroundColor: "#fff" },
+  input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 16, padding: 16, minHeight: 64, maxHeight: 130, marginBottom: 12 },
+  button: { backgroundColor: "#111", padding: 16, borderRadius: 16, marginBottom: 10 },
+  mailButton: { backgroundColor: "#7c3aed", padding: 16, borderRadius: 16 },
+  buttonText: { color: "#fff", textAlign: "center", fontWeight: "700", fontSize: 16 },
+  finalBox: { borderWidth: 1, borderColor: "#ddd", borderRadius: 18, padding: 16, marginBottom: 24, backgroundColor: "#fafafa" },
+  finalTitle: { fontSize: 20, fontWeight: "800", marginBottom: 10 },
+  finalInput: { borderWidth: 1, borderColor: "#ddd", borderRadius: 14, padding: 14, minHeight: 280, backgroundColor: "#fff", textAlignVertical: "top", marginBottom: 12 },
+  copyButton: { backgroundColor: "#2563eb", padding: 14, borderRadius: 14, marginBottom: 10 },
+  saveButton: { backgroundColor: "#16a34a", padding: 14, borderRadius: 14 },
 });
+EOF
