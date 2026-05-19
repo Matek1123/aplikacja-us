@@ -1,8 +1,3 @@
-cd ~/aplikacja-us 2>/dev/null || cd ~/urzad-ai-mailer
-
-cat > app/generator.tsx <<'EOF'
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Clipboard from "expo-clipboard";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -15,220 +10,324 @@ import {
   View,
 } from "react-native";
 
-import { generateWithAI } from "../lib/openai";
-
-type Message = {
-  role: "user" | "ai";
-  content: string;
-};
-
 export default function GeneratorScreen() {
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [finalMail, setFinalMail] = useState("");
+  const [description, setDescription] = useState("");
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [mail, setMail] = useState("");
+  const [office, setOffice] = useState("");
   const [loading, setLoading] = useState(false);
-  const [loadingMail, setLoadingMail] = useState(false);
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
-
-    const nextMessages: Message[] = [...messages, { role: "user", content: input }];
-    setMessages(nextMessages);
-
-    const currentInput = input;
-    setInput("");
+  // 1 pytanie AI
+  const askQuestion = async () => {
+    if (!description.trim()) {
+      Alert.alert("Błąd", "Opisz sprawę.");
+      return;
+    }
 
     try {
       setLoading(true);
 
-      const conversation = nextMessages
-        .map((m) => `${m.role === "user" ? "Użytkownik" : "AI"}: ${m.content}`)
-        .join("\n\n");
+      const response = await fetch(
+        "http://127.0.0.1:3001/ask-question",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text: description,
+          }),
+        }
+      );
 
-      const prompt = `
-Jesteś polskim asystentem pomagającym przygotować zapytanie do urzędu.
+      const data = await response.json();
 
-Prowadź rozmowę naturalnie.
-Na podstawie wiadomości użytkownika:
-- domyśl się możliwej intencji,
-- zadaj 1-3 krótkie pytania doprecyzowujące,
-- nie pisz jeszcze finalnego maila,
-- nie używaj sztywnego szablonu,
-- mów po polsku.
-
-Historia rozmowy:
-${conversation}
-
-Ostatnia wiadomość użytkownika:
-${currentInput}
-`;
-
-      const response = await generateWithAI(prompt);
-      setMessages((prev) => [...prev, { role: "ai", content: response }]);
+      setQuestion(data.question);
+      setOffice(data.office);
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", content: "Nie udało się wygenerować odpowiedzi lokalnego AI." },
-      ]);
+      console.log(error);
+
+      Alert.alert(
+        "Błąd",
+        "Nie udało się wygenerować pytania."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const generateFinalMail = async () => {
-    if (messages.length === 0) {
-      Alert.alert("Brak rozmowy", "Najpierw opisz sprawę.");
-      return;
-    }
-
+  // FINALNY MAIL
+  const generateMail = async () => {
     try {
-      setLoadingMail(true);
+      setLoading(true);
 
-      const conversation = messages
-        .map((m) => `${m.role === "user" ? "Użytkownik" : "AI"}: ${m.content}`)
-        .join("\n\n");
+      const response = await fetch(
+        "http://127.0.0.1:3001/generate-mail",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            originalText: description,
+            answer,
+          }),
+        }
+      );
 
-      const prompt = `
-Na podstawie poniższej rozmowy napisz gotowy formalny mail do polskiego urzędu.
+      const data = await response.json();
 
-Zasady:
-- mail ma być gotowy do wysłania,
-- użyj formalnego języka,
-- zawrzyj konkretne pytania,
-- poproś o wskazanie podstawy prawnej,
-- nie twórz porady prawnej ani podatkowej,
-- nie dodawaj komentarzy poza treścią maila.
-
-Rozmowa:
-${conversation}
-`;
-
-      const mail = await generateWithAI(prompt);
-      setFinalMail(mail);
+      setMail(data.mail);
+      setOffice(data.office);
     } catch (error) {
-      Alert.alert("Błąd", "Nie udało się wygenerować finalnego maila.");
+      console.log(error);
+
+      Alert.alert(
+        "Błąd",
+        "Nie udało się wygenerować maila."
+      );
     } finally {
-      setLoadingMail(false);
+      setLoading(false);
     }
   };
 
-  const copyMail = async () => {
-    if (!finalMail.trim()) return;
-    await Clipboard.setStringAsync(finalMail);
-    Alert.alert("Skopiowano", "Mail został skopiowany.");
-  };
-
-  const saveMail = async () => {
-    if (!finalMail.trim()) {
-      Alert.alert("Brak maila", "Najpierw wygeneruj finalny mail.");
-      return;
-    }
-
-    const item = {
-      id: Date.now().toString(),
-      institutionName: "Do uzupełnienia",
-      institutionEmail: "",
-      institutionCategory: "",
-      keywords: messages[0]?.content || "",
-      content: finalMail,
-      subject: "Zapytanie do urzędu",
-      createdAt: new Date().toISOString(),
-      status: "draft",
-    };
-
-    const existing = await AsyncStorage.getItem("mail_history");
-    const history = existing ? JSON.parse(existing) : [];
-
-    await AsyncStorage.setItem("mail_history", JSON.stringify([item, ...history]));
-    Alert.alert("Zapisano", "Mail zapisano w historii jako szkic.");
+  const reset = () => {
+    setDescription("");
+    setQuestion("");
+    setAnswer("");
+    setMail("");
+    setOffice("");
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>US AI</Text>
-      <Text style={styles.subtitle}>Opisz sprawę, doprecyzuj ją w rozmowie, a potem wygeneruj mail do urzędu.</Text>
 
-      <ScrollView style={styles.chat}>
-        {messages.map((message, index) => (
-          <View
-            key={index}
-            style={[
-              styles.message,
-              message.role === "user" ? styles.userMessage : styles.aiMessage,
-            ]}
-          >
-            <Text style={message.role === "user" ? styles.userText : styles.aiText}>
-              {message.content}
-            </Text>
-          </View>
-        ))}
+      <Text style={styles.subtitle}>
+        Opisz sprawę. AI zada jedno pytanie i wygeneruje profesjonalny mail do urzędu.
+      </Text>
 
-        {loading ? <ActivityIndicator size="large" style={styles.loader} /> : null}
+      <Text style={styles.label}>Opis sprawy</Text>
 
-        {finalMail ? (
-          <View style={styles.finalBox}>
-            <Text style={styles.finalTitle}>Finalny mail</Text>
-            <TextInput
-              style={styles.finalInput}
-              multiline
-              value={finalMail}
-              onChangeText={setFinalMail}
-            />
+      <TextInput
+        style={styles.input}
+        multiline
+        placeholder="np. sprzedałem BTC mieszkając częściowo na Litwie..."
+        value={description}
+        onChangeText={setDescription}
+      />
 
-            <Pressable style={styles.copyButton} onPress={copyMail}>
-              <Text style={styles.buttonText}>Kopiuj mail</Text>
-            </Pressable>
+      <Pressable
+        style={styles.button}
+        onPress={askQuestion}
+      >
+        <Text style={styles.buttonText}>
+          AI: zadaj pytanie
+        </Text>
+      </Pressable>
 
-            <Pressable style={styles.saveButton} onPress={saveMail}>
-              <Text style={styles.buttonText}>Zapisz do historii</Text>
-            </Pressable>
-          </View>
-        ) : null}
-      </ScrollView>
-
-      <View style={styles.bottom}>
-        <TextInput
-          style={styles.input}
-          placeholder="np. bitcoin podatki, sprzedaż BTC w 2024..."
-          value={input}
-          onChangeText={setInput}
-          multiline
+      {loading ? (
+        <ActivityIndicator
+          size="large"
+          style={{ marginVertical: 20 }}
         />
+      ) : null}
 
-        <Pressable style={styles.button} onPress={sendMessage}>
-          <Text style={styles.buttonText}>Wyślij</Text>
-        </Pressable>
-
-        <Pressable style={styles.mailButton} onPress={generateFinalMail}>
-          <Text style={styles.buttonText}>
-            {loadingMail ? "Generuję..." : "Generuj finalny mail"}
+      {office ? (
+        <View style={styles.officeBox}>
+          <Text style={styles.officeTitle}>
+            Sugerowany urząd
           </Text>
-        </Pressable>
-      </View>
-    </View>
+
+          <Text style={styles.officeText}>
+            {office}
+          </Text>
+        </View>
+      ) : null}
+
+      {question ? (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>
+            Pytanie AI
+          </Text>
+
+          <Text style={styles.question}>
+            {question}
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            multiline
+            placeholder="Twoja odpowiedź..."
+            value={answer}
+            onChangeText={setAnswer}
+          />
+
+          <Pressable
+            style={styles.mailButton}
+            onPress={generateMail}
+          >
+            <Text style={styles.buttonText}>
+              AI: wygeneruj mail
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {mail ? (
+        <View style={styles.mailBox}>
+          <Text style={styles.cardTitle}>
+            Finalny mail
+          </Text>
+
+          <TextInput
+            style={styles.mailInput}
+            multiline
+            value={mail}
+            onChangeText={setMail}
+          />
+
+          <Pressable
+            style={styles.resetButton}
+            onPress={reset}
+          >
+            <Text style={styles.resetText}>
+              Nowa sprawa
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff", paddingTop: 60 },
-  title: { fontSize: 34, fontWeight: "800", paddingHorizontal: 20 },
-  subtitle: { color: "#666", paddingHorizontal: 20, marginTop: 6, marginBottom: 20, lineHeight: 21 },
-  chat: { flex: 1, paddingHorizontal: 16 },
-  message: { padding: 16, borderRadius: 18, marginBottom: 12, maxWidth: "90%" },
-  userMessage: { backgroundColor: "#111", alignSelf: "flex-end" },
-  aiMessage: { backgroundColor: "#f1f5f9", alignSelf: "flex-start" },
-  userText: { color: "#fff", fontSize: 16, lineHeight: 24 },
-  aiText: { color: "#111", fontSize: 16, lineHeight: 24 },
-  loader: { marginTop: 20 },
-  bottom: { borderTopWidth: 1, borderColor: "#eee", padding: 16, backgroundColor: "#fff" },
-  input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 16, padding: 16, minHeight: 64, maxHeight: 130, marginBottom: 12 },
-  button: { backgroundColor: "#111", padding: 16, borderRadius: 16, marginBottom: 10 },
-  mailButton: { backgroundColor: "#7c3aed", padding: 16, borderRadius: 16 },
-  buttonText: { color: "#fff", textAlign: "center", fontWeight: "700", fontSize: 16 },
-  finalBox: { borderWidth: 1, borderColor: "#ddd", borderRadius: 18, padding: 16, marginBottom: 24, backgroundColor: "#fafafa" },
-  finalTitle: { fontSize: 20, fontWeight: "800", marginBottom: 10 },
-  finalInput: { borderWidth: 1, borderColor: "#ddd", borderRadius: 14, padding: 14, minHeight: 280, backgroundColor: "#fff", textAlignVertical: "top", marginBottom: 12 },
-  copyButton: { backgroundColor: "#2563eb", padding: 14, borderRadius: 14, marginBottom: 10 },
-  saveButton: { backgroundColor: "#16a34a", padding: 14, borderRadius: 14 },
+  container: {
+    padding: 24,
+    backgroundColor: "#fff",
+    flexGrow: 1,
+  },
+
+  title: {
+  fontSize: 36,
+  fontWeight: "900",
+  marginBottom: 10,
+  color: "#0f172a",
+  },
+
+  subtitle: {
+    color: "#666",
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+
+  label: {
+    fontSize: 17,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+
+  input: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 16,
+    padding: 16,
+    minHeight: 120,
+    marginBottom: 16,
+    textAlignVertical: "top",
+  },
+
+  button: {
+    backgroundColor: "#111",
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 24,
+  },
+
+  mailButton: {
+    backgroundColor: "#7c3aed",
+    padding: 16,
+    borderRadius: 16,
+    marginTop: 10,
+  },
+
+  buttonText: {
+    color: "#fff",
+    textAlign: "center",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+
+  officeBox: {
+    backgroundColor: "#eff6ff",
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 20,
+  },
+
+  officeTitle: {
+    fontWeight: "800",
+    fontSize: 16,
+    marginBottom: 8,
+  },
+
+  officeText: {
+    fontSize: 16,
+    color: "#111",
+  },
+
+  card: {
+    backgroundColor: "#f5f5f5",
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 20,
+  },
+
+  cardTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    marginBottom: 12,
+  },
+
+  question: {
+    fontSize: 16,
+    lineHeight: 24,
+    marginBottom: 16,
+  },
+
+  mailBox: {
+    backgroundColor: "#fafafa",
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 30,
+  },
+
+  mailInput: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 16,
+    padding: 16,
+    minHeight: 320,
+    textAlignVertical: "top",
+    backgroundColor: "#f8fafc",
+  },
+
+  resetButton: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    padding: 14,
+    borderRadius: 14,
+  },
+
+  resetText: {
+    textAlign: "center",
+    fontWeight: "700",
+    color: "#111",
+  },
 });
-EOF
