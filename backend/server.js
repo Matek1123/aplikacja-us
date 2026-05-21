@@ -1,179 +1,89 @@
-const express = require("express");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { GoogleGenAI } from "@google/genai";
+
+dotenv.config({ path: ".env.local" });
 
 const app = express();
 
-app.use(cors({ origin: "*" }));
+app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("US AI backend działa");
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
 });
 
-function detectCase(text) {
-  const t = text.toLowerCase();
+function extractJson(text) {
+  const cleaned = text
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
 
-  if (
-    t.includes("bitcoin") ||
-    t.includes("btc") ||
-    t.includes("krypto") ||
-    t.includes("kryptowalut") ||
-    t.includes("eth") ||
-    t.includes("ether")
-  ) {
-    return {
-      office: "Krajowa Informacja Skarbowa",
-      category: "Podatki / Kryptowaluty",
-      risk: "Średni",
-      topic: "Zapytanie dotyczące opodatkowania kryptowalut",
-      documents: [
-        "historia transakcji z giełdy",
-        "potwierdzenia przelewów",
-        "daty zakupu i sprzedaży",
-        "wartość transakcji w PLN",
-        "informacja o rezydencji podatkowej"
-      ],
-      question: "W którym kraju znajdowała się Twoja rezydencja podatkowa w roku sprzedaży?",
-      finalQuestions: [
-        "W którym państwie powinien zostać rozliczony podatek od opisanej transakcji?",
-        "Czy sprzedaż kryptowaluty należy wykazać w deklaracji PIT-38?",
-        "Czy zastosowanie mają przepisy umowy o unikaniu podwójnego opodatkowania?",
-        "Jakie dokumenty należy posiadać na potrzeby rozliczenia?"
-      ]
-    };
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+
+  if (start === -1 || end === -1) {
+    throw new Error("Gemini nie zwrócił JSON-a: " + cleaned);
   }
 
-  if (
-    t.includes("budowa") ||
-    t.includes("garaż") ||
-    t.includes("garaz") ||
-    t.includes("pozwolenie")
-  ) {
-    return {
-      office: "Starostwo Powiatowe / Urząd Miasta",
-      category: "Budownictwo",
-      risk: "Średni",
-      topic: "Zapytanie dotyczące sprawy budowlanej",
-      documents: [
-        "numer działki",
-        "adres nieruchomości",
-        "opis planowanych robót",
-        "mapa lub szkic sytuacyjny",
-        "informacja o miejscowym planie"
-      ],
-      question: "Czy inwestycja została już zgłoszona albo objęta pozwoleniem?",
-      finalQuestions: [
-        "Czy opisana sytuacja wymaga zgłoszenia lub pozwolenia?",
-        "Jakie dokumenty należy przygotować?",
-        "Jaka jest właściwa podstawa prawna?",
-        "Jaki urząd jest właściwy dla tej sprawy?"
-      ]
-    };
-  }
-
-  if (t.includes("zus") || t.includes("składk") || t.includes("działalność")) {
-    return {
-      office: "Zakład Ubezpieczeń Społecznych",
-      category: "ZUS / Składki",
-      risk: "Średni",
-      topic: "Zapytanie dotyczące składek i działalności",
-      documents: [
-        "CEIDG",
-        "umowa o pracę, jeśli istnieje",
-        "informacja o przychodach",
-        "data rozpoczęcia działalności",
-        "dotychczasowe zgłoszenia ZUS"
-      ],
-      question: "Czy działalność jest już zarejestrowana?",
-      finalQuestions: [
-        "Czy istnieje obowiązek opłacania składek?",
-        "Jakie składki należy opłacać?",
-        "Czy można skorzystać z ulg?",
-        "Jakie dokumenty należy złożyć?"
-      ]
-    };
-  }
-
-  return {
-    office: "Właściwy urząd",
-    category: "Sprawa urzędowa",
-    risk: "Niski / do ustalenia",
-    topic: "Zapytanie dotyczące sprawy urzędowej",
-    documents: [
-      "opis sprawy",
-      "daty zdarzeń",
-      "posiadane dokumenty",
-      "dane kontaktowe",
-      "ewentualne wcześniejsze decyzje lub pisma"
-    ],
-    question: "Jaki jest najważniejszy cel Twojego zapytania?",
-    finalQuestions: [
-      "Jaki urząd jest właściwy?",
-      "Jakie dokumenty należy przygotować?",
-      "Jaka jest podstawa prawna?"
-    ]
-  };
+  return cleaned.slice(start, end + 1);
 }
 
-function buildMail(caseData, originalText, answer) {
-  const questions = caseData.finalQuestions
-    .map((q, i) => `${i + 1}. ${q}`)
-    .join("\n");
+app.post("/api/chat", async (req, res) => {
+  try {
+    console.log("BODY:", req.body);
 
-  return `Szanowni Państwo,
+    const { userInput, editedInput, clarificationAnswer } = req.body;
 
-zwracam się z uprzejmą prośbą o udzielenie informacji dotyczącej sprawy:
+    const effectiveInput = editedInput || userInput;
 
-${caseData.topic}
+    const prompt = `
+Zwróć TYLKO poprawny JSON. Bez markdowna. Bez komentarzy.
 
-Opis sytuacji:
-${originalText}
+Opis użytkownika:
+${effectiveInput}
 
-Dodatkowe informacje:
-${answer || "Brak dodatkowych informacji."}
+Odpowiedź na pytanie pomocnicze:
+${clarificationAnswer || "Brak"}
 
-W związku z powyższym proszę o informację:
+Zasady:
+- Nie przepisuj tekstu 1:1.
+- Zrozum intencję użytkownika.
+- Jeśli brakuje ważnej informacji, zadaj dokładnie jedno krótkie pytanie.
+- Jeśli informacji wystarcza, napisz gotową wiadomość.
+- Pisz po polsku.
+- Nie wymyślaj faktów.
 
-${questions}
-
-Będę wdzięczny za wskazanie właściwej podstawy prawnej oraz rekomendowanego sposobu dalszego postępowania.
-
-Z poważaniem
-[Imię i nazwisko]
-
-Sugerowany urząd:
-${caseData.office}`;
+Format:
+{
+  "needsClarification": true albo false,
+  "question": "pytanie albo null",
+  "message": "wiadomość albo null"
 }
+`;
 
-app.post("/ask-question", (req, res) => {
-  const { text = "" } = req.body;
-  const data = detectCase(text);
+    const result = await ai.models.generateContent({
+      model: "gemini-2.5-flash-lite",
+      contents: prompt,
+    });
 
-  res.json({
-    question: data.question,
-    office: data.office,
-    category: data.category,
-    risk: data.risk,
-    documents: data.documents,
-    topic: data.topic
-  });
+    console.log("GEMINI RAW:", result.text);
+
+    const jsonText = extractJson(result.text || "");
+    const parsed = JSON.parse(jsonText);
+
+    return res.json(parsed);
+  } catch (error) {
+    console.error("BACKEND ERROR:", error);
+
+    return res.status(500).json({
+      error: "Błąd backendu AI",
+      details: String(error),
+    });
+  }
 });
 
-app.post("/generate-mail", (req, res) => {
-  const { originalText = "", answer = "" } = req.body;
-  const data = detectCase(originalText);
-  const mail = buildMail(data, originalText, answer);
-
-  res.json({
-    mail,
-    office: data.office,
-    category: data.category,
-    risk: data.risk,
-    documents: data.documents,
-    topic: data.topic
-  });
-});
-
-app.listen(3001, "127.0.0.1", () => {
-  console.log("US AI backend działa na porcie 3001");
+app.listen(3001, () => {
+  console.log("Backend działa na http://localhost:3001");
 });

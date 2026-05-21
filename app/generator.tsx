@@ -15,10 +15,8 @@ export default function GeneratorScreen() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [mail, setMail] = useState("");
-  const [office, setOffice] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // 1 pytanie AI
   const askQuestion = async () => {
     if (!description.trim()) {
       Alert.alert("Błąd", "Opisz sprawę.");
@@ -27,66 +25,66 @@ export default function GeneratorScreen() {
 
     try {
       setLoading(true);
+      setQuestion("");
+      setMail("");
 
-      const response = await fetch(
-        "http://127.0.0.1:3001/ask-question",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text: description,
-          }),
-        }
-      );
+      const response = await fetch("http://127.0.0.1:3001/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userInput: description,
+        }),
+      });
 
       const data = await response.json();
 
-      setQuestion(data.question);
-      setOffice(data.office);
+      if (data.needsClarification) {
+        setQuestion(data.question);
+      } else {
+        setMail(data.message);
+      }
     } catch (error) {
       console.log(error);
-
-      Alert.alert(
-        "Błąd",
-        "Nie udało się wygenerować pytania."
-      );
+      Alert.alert("Błąd", "Nie udało się połączyć z AI.");
     } finally {
       setLoading(false);
     }
   };
 
-  // FINALNY MAIL
   const generateMail = async () => {
+    if (!description.trim()) {
+      Alert.alert("Błąd", "Opisz sprawę.");
+      return;
+    }
+
+    if (!answer.trim()) {
+      Alert.alert("Błąd", "Odpowiedz na pytanie AI.");
+      return;
+    }
+
     try {
       setLoading(true);
 
-      const response = await fetch(
-        "http://127.0.0.1:3001/generate-mail",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            originalText: description,
-            answer,
-          }),
-        }
-      );
+      const response = await fetch("http://127.0.0.1:3001/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userInput: description,
+          clarificationAnswer: answer,
+        }),
+      });
 
       const data = await response.json();
 
-      setMail(data.mail);
-      setOffice(data.office);
+      setMail(data.message);
+      setQuestion("");
     } catch (error) {
       console.log(error);
-
-      Alert.alert(
-        "Błąd",
-        "Nie udało się wygenerować maila."
-      );
+      Alert.alert("Błąd", "Nie udało się wygenerować wiadomości.");
     } finally {
       setLoading(false);
     }
@@ -97,7 +95,6 @@ export default function GeneratorScreen() {
     setQuestion("");
     setAnswer("");
     setMail("");
-    setOffice("");
   };
 
   return (
@@ -105,7 +102,8 @@ export default function GeneratorScreen() {
       <Text style={styles.title}>US AI</Text>
 
       <Text style={styles.subtitle}>
-        Opisz sprawę. AI zada jedno pytanie i wygeneruje profesjonalny mail do urzędu.
+        Opisz sprawę. AI zada jedno pytanie pomocnicze i przygotuje gotową
+        wiadomość.
       </Text>
 
       <Text style={styles.label}>Opis sprawy</Text>
@@ -113,48 +111,22 @@ export default function GeneratorScreen() {
       <TextInput
         style={styles.input}
         multiline
-        placeholder="np. sprzedałem BTC mieszkając częściowo na Litwie..."
+        placeholder="np. kupiłem bitcoina w 2025"
         value={description}
         onChangeText={setDescription}
       />
 
-      <Pressable
-        style={styles.button}
-        onPress={askQuestion}
-      >
-        <Text style={styles.buttonText}>
-          AI: zadaj pytanie
-        </Text>
+      <Pressable style={styles.button} onPress={askQuestion}>
+        <Text style={styles.buttonText}>AI: zadaj pytanie</Text>
       </Pressable>
 
-      {loading ? (
-        <ActivityIndicator
-          size="large"
-          style={{ marginVertical: 20 }}
-        />
-      ) : null}
-
-      {office ? (
-        <View style={styles.officeBox}>
-          <Text style={styles.officeTitle}>
-            Sugerowany urząd
-          </Text>
-
-          <Text style={styles.officeText}>
-            {office}
-          </Text>
-        </View>
-      ) : null}
+      {loading ? <ActivityIndicator size="large" style={styles.loader} /> : null}
 
       {question ? (
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>
-            Pytanie AI
-          </Text>
+          <Text style={styles.cardTitle}>Pytanie AI</Text>
 
-          <Text style={styles.question}>
-            {question}
-          </Text>
+          <Text style={styles.question}>{question}</Text>
 
           <TextInput
             style={styles.input}
@@ -164,22 +136,15 @@ export default function GeneratorScreen() {
             onChangeText={setAnswer}
           />
 
-          <Pressable
-            style={styles.mailButton}
-            onPress={generateMail}
-          >
-            <Text style={styles.buttonText}>
-              AI: wygeneruj mail
-            </Text>
+          <Pressable style={styles.mailButton} onPress={generateMail}>
+            <Text style={styles.buttonText}>AI: wygeneruj wiadomość</Text>
           </Pressable>
         </View>
       ) : null}
 
       {mail ? (
         <View style={styles.mailBox}>
-          <Text style={styles.cardTitle}>
-            Finalny mail
-          </Text>
+          <Text style={styles.cardTitle}>Gotowa wiadomość</Text>
 
           <TextInput
             style={styles.mailInput}
@@ -188,13 +153,8 @@ export default function GeneratorScreen() {
             onChangeText={setMail}
           />
 
-          <Pressable
-            style={styles.resetButton}
-            onPress={reset}
-          >
-            <Text style={styles.resetText}>
-              Nowa sprawa
-            </Text>
+          <Pressable style={styles.resetButton} onPress={reset}>
+            <Text style={styles.resetText}>Nowa sprawa</Text>
           </Pressable>
         </View>
       ) : null}
@@ -205,129 +165,108 @@ export default function GeneratorScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 24,
-    backgroundColor: "#fff",
+    backgroundColor: "#f8fafc",
     flexGrow: 1,
   },
-
   title: {
-  fontSize: 36,
-  fontWeight: "900",
-  marginBottom: 10,
-  color: "#0f172a",
+    fontSize: 36,
+    fontWeight: "900",
+    marginBottom: 10,
+    color: "#0f172a",
   },
-
   subtitle: {
-    color: "#666",
-    lineHeight: 22,
-    marginBottom: 24,
+    color: "#475569",
+    lineHeight: 24,
+    marginBottom: 28,
+    fontSize: 16,
   },
-
   label: {
     fontSize: 17,
-    fontWeight: "700",
+    fontWeight: "800",
     marginBottom: 10,
+    color: "#0f172a",
   },
-
   input: {
     borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 16,
+    borderColor: "#cbd5e1",
+    borderRadius: 18,
     padding: 16,
     minHeight: 120,
     marginBottom: 16,
     textAlignVertical: "top",
+    backgroundColor: "#fff",
+    fontSize: 15,
+    lineHeight: 22,
   },
-
   button: {
-    backgroundColor: "#111",
-    padding: 16,
-    borderRadius: 16,
+    backgroundColor: "#0f172a",
+    padding: 18,
+    borderRadius: 18,
     marginBottom: 24,
   },
-
   mailButton: {
     backgroundColor: "#7c3aed",
-    padding: 16,
-    borderRadius: 16,
+    padding: 18,
+    borderRadius: 18,
     marginTop: 10,
   },
-
   buttonText: {
     color: "#fff",
     textAlign: "center",
-    fontWeight: "700",
-    fontSize: 16,
-  },
-
-  officeBox: {
-    backgroundColor: "#eff6ff",
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 20,
-  },
-
-  officeTitle: {
     fontWeight: "800",
     fontSize: 16,
-    marginBottom: 8,
   },
-
-  officeText: {
-    fontSize: 16,
-    color: "#111",
+  loader: {
+    marginVertical: 20,
   },
-
   card: {
-    backgroundColor: "#f5f5f5",
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 20,
+    backgroundColor: "#ffffff",
+    borderRadius: 22,
+    padding: 20,
+    marginBottom: 22,
   },
-
   cardTitle: {
     fontSize: 20,
     fontWeight: "800",
     marginBottom: 12,
+    color: "#0f172a",
   },
-
   question: {
     fontSize: 16,
     lineHeight: 24,
     marginBottom: 16,
+    color: "#111827",
   },
-
   mailBox: {
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
     borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 18,
-    padding: 18,
+    borderColor: "#e2e8f0",
+    borderRadius: 22,
+    padding: 20,
     marginBottom: 30,
   },
-
   mailInput: {
     borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 16,
+    borderColor: "#cbd5e1",
+    borderRadius: 18,
     padding: 16,
-    minHeight: 320,
+    minHeight: 340,
     textAlignVertical: "top",
-    backgroundColor: "#f8fafc",
+    backgroundColor: "#fff",
+    fontSize: 15,
+    lineHeight: 22,
   },
-
   resetButton: {
     marginTop: 14,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: "#cbd5e1",
     padding: 14,
     borderRadius: 14,
+    backgroundColor: "#fff",
   },
-
   resetText: {
     textAlign: "center",
-    fontWeight: "700",
-    color: "#111",
+    fontWeight: "800",
+    color: "#0f172a",
   },
 });
