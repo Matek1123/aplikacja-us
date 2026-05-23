@@ -12,13 +12,22 @@ import {
 
 export default function GeneratorScreen() {
   const [description, setDescription] = useState("");
+  const [editedDescription, setEditedDescription] = useState("");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [mail, setMail] = useState("");
+  const [office, setOffice] = useState("");
+  const [subject, setSubject] = useState("");
   const [loading, setLoading] = useState(false);
+  const [category, setCategory] = useState("");
+  const [riskLevel, setRiskLevel] = useState("");
+  const [confidence, setConfidence] = useState(0);
+const [missingInformation, setMissingInformation] = useState([]);
+
+  const finalDescription = editedDescription.trim() || description.trim();
 
   const askQuestion = async () => {
-    if (!description.trim()) {
+    if (!finalDescription) {
       Alert.alert("Błąd", "Opisz sprawę.");
       return;
     }
@@ -26,7 +35,10 @@ export default function GeneratorScreen() {
     try {
       setLoading(true);
       setQuestion("");
+      setAnswer("");
       setMail("");
+      setOffice("");
+      setSubject("");
 
       const response = await fetch("http://127.0.0.1:3001/api/chat", {
         method: "POST",
@@ -34,27 +46,34 @@ export default function GeneratorScreen() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          userInput: description,
+          userInput: finalDescription,
         }),
       });
 
       const data = await response.json();
 
+      if (data.error) {
+        Alert.alert("Błąd AI", data.details || data.error);
+        return;
+      }
+
       if (data.needsClarification) {
-        setQuestion(data.question);
+        setQuestion(data.question || "");
       } else {
-        setMail(data.message);
+        setOffice(data.office || "");
+        setSubject(data.subject || "");
+        setMail(data.message || "");
       }
     } catch (error) {
       console.log(error);
-      Alert.alert("Błąd", "Nie udało się połączyć z AI.");
+      Alert.alert("Błąd", "Nie udało się połączyć z backendem AI.");
     } finally {
       setLoading(false);
     }
   };
 
   const generateMail = async () => {
-    if (!description.trim()) {
+    if (!finalDescription) {
       Alert.alert("Błąd", "Opisz sprawę.");
       return;
     }
@@ -73,18 +92,25 @@ export default function GeneratorScreen() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          userInput: description,
+          userInput: finalDescription,
           clarificationAnswer: answer,
         }),
       });
 
       const data = await response.json();
 
-      setMail(data.message);
+      if (data.error) {
+        Alert.alert("Błąd AI", data.details || data.error);
+        return;
+      }
+
+      setOffice(data.office || "");
+      setSubject(data.subject || "");
+      setMail(data.message || "");
       setQuestion("");
     } catch (error) {
       console.log(error);
-      Alert.alert("Błąd", "Nie udało się wygenerować wiadomości.");
+      Alert.alert("Błąd", "Nie udało się wygenerować maila.");
     } finally {
       setLoading(false);
     }
@@ -92,9 +118,12 @@ export default function GeneratorScreen() {
 
   const reset = () => {
     setDescription("");
+    setEditedDescription("");
     setQuestion("");
     setAnswer("");
     setMail("");
+    setOffice("");
+    setSubject("");
   };
 
   return (
@@ -102,8 +131,8 @@ export default function GeneratorScreen() {
       <Text style={styles.title}>US AI</Text>
 
       <Text style={styles.subtitle}>
-        Opisz sprawę. AI zada jedno pytanie pomocnicze i przygotuje gotową
-        wiadomość.
+        Opisz sprawę. Możesz poprawić opis przed wysłaniem do AI. Następnie AI
+        zada jedno pytanie pomocnicze i przygotuje gotowy mail do urzędu.
       </Text>
 
       <Text style={styles.label}>Opis sprawy</Text>
@@ -111,10 +140,30 @@ export default function GeneratorScreen() {
       <TextInput
         style={styles.input}
         multiline
-        placeholder="np. kupiłem bitcoina w 2025"
+        placeholder="np. kupiłem bitcoina w 2025 i jestem na minusie"
         value={description}
-        onChangeText={setDescription}
+        onChangeText={(text) => {
+          setDescription(text);
+
+          if (!editedDescription) {
+            setEditedDescription(text);
+          }
+        }}
       />
+
+      {description ? (
+        <>
+          <Text style={styles.label}>Edytuj opis przed wysłaniem</Text>
+
+          <TextInput
+            style={styles.input}
+            multiline
+            placeholder="Popraw lub doprecyzuj opis..."
+            value={editedDescription}
+            onChangeText={setEditedDescription}
+          />
+        </>
+      ) : null}
 
       <Pressable style={styles.button} onPress={askQuestion}>
         <Text style={styles.buttonText}>AI: zadaj pytanie</Text>
@@ -137,14 +186,28 @@ export default function GeneratorScreen() {
           />
 
           <Pressable style={styles.mailButton} onPress={generateMail}>
-            <Text style={styles.buttonText}>AI: wygeneruj wiadomość</Text>
+            <Text style={styles.buttonText}>AI: wygeneruj mail</Text>
           </Pressable>
         </View>
       ) : null}
 
       {mail ? (
         <View style={styles.mailBox}>
-          <Text style={styles.cardTitle}>Gotowa wiadomość</Text>
+          <Text style={styles.cardTitle}>Gotowy mail do urzędu</Text>
+
+          {office ? (
+            <View style={styles.infoBox}>
+              <Text style={styles.infoLabel}>Sugerowany urząd:</Text>
+              <Text style={styles.infoValue}>{office}</Text>
+            </View>
+          ) : null}
+
+          {subject ? (
+            <View style={styles.infoBox}>
+              <Text style={styles.infoLabel}>Temat maila:</Text>
+              <Text style={styles.infoValue}>{subject}</Text>
+            </View>
+          ) : null}
 
           <TextInput
             style={styles.mailInput}
@@ -244,6 +307,23 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 20,
     marginBottom: 30,
+  },
+  infoBox: {
+    backgroundColor: "#f1f5f9",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+  },
+  infoLabel: {
+    fontSize: 13,
+    color: "#64748b",
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  infoValue: {
+    fontSize: 16,
+    color: "#0f172a",
+    fontWeight: "800",
   },
   mailInput: {
     borderWidth: 1,
